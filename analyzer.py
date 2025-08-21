@@ -3,9 +3,11 @@
 import math
 import re
 import networkx as nx
+
 from itertools import combinations
 from collections import defaultdict
 from typing import List, Set, Dict, Any, Optional
+from style_definitions import STYLE_PERSONALITY_DICT
 
 # --- Constants ---
 PRIMARY_NODE_COLOR = "#FF6347"  # Tomato
@@ -47,6 +49,9 @@ MOOD_KEYWORDS = {
 INSTRUMENT_KEYWORDS = {"guitar", "piano", "synth", "bass", "drum", "violin", "electric guitar", "acoustic guitar", "orchestral", "flute"} # Complete
 VOCAL_KEYWORDS = {"male voice", "female voice", "male vocals", "female vocals", "vocaloid", "female singer", "opera", "gospel"}
 PRODUCTION_PROMPT = "The production is modern and clean with studio-grade fidelity and exceptional warmth and clarity and no harsh highs."
+
+
+
 
 # --- Helper Functions ---
 def format_label(style: str) -> str:
@@ -288,10 +293,15 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         top_associated_styles = [style for style, score in sorted_combined_assocs[:20]]
 
         # -- Part 1: Genre Prompt --
+        p1_personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
+        p2_personality = STYLE_PERSONALITY_DICT.get(secondary_style, {})
+
         top_bridge = next((style for style in [s for s, _ in sorted_combined_assocs] if style in bridge_nodes and style not in MOOD_KEYWORDS), None)
-        genre_prompt = f"A compelling and cinematic fusion of {primary_style} and {secondary_style}, combining the core characteristics of both genres."
-        if top_bridge:
-            genre_prompt = f"A compelling fusion of {primary_style} and {secondary_style}, combining the raw energy of {primary_style} with the intricate textures of {secondary_style}, grounded in a shared influence of {top_bridge}."
+
+        if p1_personality and p2_personality:
+            genre_prompt = f"A fusion that blends the {p1_personality['adjectives'][0]} and {p1_personality['energy']} feel of {primary_style} with the {p2_personality['adjectives'][0]}, {p2_personality['energy']} quality of {secondary_style}."
+        elif top_bridge:
+            genre_prompt = f"A compelling fusion of {primary_style} and {secondary_style}, combining their core elements, grounded in a shared influence of {top_bridge}."
         else:
             genre_prompt = f"An experimental and highly contrasting fusion of {primary_style} and {secondary_style}, aiming to blend their distinct soundscapes into a novel composition."
 
@@ -302,32 +312,41 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         unique_moods_a = list(moods_a - moods_b)
         unique_moods_b = list(moods_b - moods_a)
 
-        if shared_moods:
+        if shared_moods: # Best case: data-driven shared mood
             mood_prompt = f"The mood is intensely {shared_moods[0]}, drawing its power from both genres."
-        elif unique_moods_a and unique_moods_b:
+        elif unique_moods_a and unique_moods_b: # Good case: data-driven contrasting moods
             mood_prompt = f"The track's mood is a unique contrast, blending the {unique_moods_a[0]} edge of {primary_style} with the {unique_moods_b[0]} atmosphere of {secondary_style}."
+        elif p1_personality and p2_personality: # Personality-driven fallback
+            mood_prompt = f"The emotional arc captures the {p1_personality['adjectives'][0]} nature of {primary_style}, building towards the {p2_personality['adjectives'][0]} intensity of {secondary_style}."
         else: # Fallback
             mood_prompt = "The track has an emotionally resonant and dynamic feel that builds in intensity."
 
         # -- Part 3: Instrumentation Prompt --
         inst_priority = ['guitar', 'electric guitar', 'acoustic guitar', 'synth', 'piano', 'bass', 'drum', 'orchestral', 'violin', 'flute']
+        # CRITICAL FIX: Prioritize primary/secondary styles if they are instruments
+        forced_instruments = []
+        if primary_style in INSTRUMENT_KEYWORDS: forced_instruments.append(primary_style)
+        if secondary_style in INSTRUMENT_KEYWORDS: forced_instruments.append(secondary_style)
+
         instruments_a = sorted([inst for inst in top_assocs_a if inst in INSTRUMENT_KEYWORDS], key=lambda x: inst_priority.index(x) if x in inst_priority else len(inst_priority))[:2]
         instruments_b = sorted([inst for inst in top_assocs_b if inst in INSTRUMENT_KEYWORDS], key=lambda x: inst_priority.index(x) if x in inst_priority else len(inst_priority))[:2]
-        combined_instruments = list(dict.fromkeys(instruments_a + instruments_b)) # Get unique instruments, preserving order
+        combined_instruments = list(dict.fromkeys(forced_instruments + instruments_a + instruments_b)) # Get unique instruments, preserving order
 
         if len(combined_instruments) >= 3:
-            inst1, inst2, inst3 = combined_instruments[0], combined_instruments[1], combined_instruments[2]
-            instrument_prompt = f"The instrumentation is a rich hybrid, centered around {inst1} and {inst2} from both styles, with a solid {inst3} foundation."
+            instrument_prompt = f"The instrumentation is a rich hybrid, centered around the {combined_instruments[0]} and {combined_instruments[1]}, with a solid {combined_instruments[2]} foundation."
         elif len(combined_instruments) == 2:
-            instrument_prompt = f"The instrumentation blends the {combined_instruments[0]} from {primary_style} with the {combined_instruments[1]} from {secondary_style}."
+            instrument_prompt = f"The instrumentation blends a prominent {combined_instruments[0]} with the texture of {combined_instruments[1]}."
         else: # Fallback
             instrument_prompt = "The track features a rich and layered instrumentation with a strong rhythmic foundation."
 
         # -- Part 4: Vocal Prompt --
         vocals_a = [vocal for vocal in top_assocs_a if vocal in VOCAL_KEYWORDS]
         vocals_b = [vocal for vocal in top_assocs_b if vocal in VOCAL_KEYWORDS]
-
-        if vocals_a:
+        
+        # Use personality-driven vocal style if available, otherwise fallback to data-driven or generic
+        if p1_personality.get('vocal_style'):
+            vocal_prompt = f"Featuring {p1_personality['vocal_style']} lead vocals, supported by rich layered background harmonies."
+        elif vocals_a:
             primary_vocal_style = vocals_a[0].replace(" voice", "").replace(" vocals", "").replace(" singer", "")
             if vocals_b and vocals_b[0] != vocals_a[0]:
                 secondary_vocal_style = vocals_b[0].replace(" voice", "").replace(" vocals", "").replace(" singer", "")
