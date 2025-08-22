@@ -147,15 +147,16 @@ with tab2:
         )
     gemini_api_key = gemini_api_key_input or os.getenv("GEMINI_API_KEY")
     all_styles_sorted = sorted(list(DEFAULT_STYLES))
+    
+    primary_style = st.selectbox(
+        "**Primary Style:**",
+        options=all_styles_sorted,
+        index=0,
+        placeholder="Search for a primary style..."
+    )
+    
     col1_exp, col2_exp = st.columns(2)
     with col1_exp:
-        primary_style = st.selectbox(
-            "**Primary Style:**",
-            options=all_styles_sorted,
-            index=None,
-            placeholder="Search for a primary style..."
-        )
-    with col2_exp:
         secondary_style = None
         if primary_style:
             secondary_options = [""] + [s for s in all_styles_sorted if s != primary_style]
@@ -166,16 +167,29 @@ with tab2:
                 placeholder="Select a style to blend... (Optional)"
             )
             if secondary_style == "": secondary_style = None
+    
+    with col2_exp:
+        negative_prompt_explorer_input = st.text_input(
+            "**Negative Styles (to push away from):**",
+            placeholder="e.g., pop, upbeat, electronic",
+            help="Specify styles to actively avoid. This will influence the analysis and the final prompt."
+        )
 
+    creative_direction_input = st.text_area(
+        "**Additional Creative Direction (Optional):**",
+        placeholder="e.g., Use a sitar as a lead instrument, theme of a lone wanderer, heavy use of delay effects...",
+        help="Add any specific instructions that are mandatory for the final prompt. These will take priority."
+    )
+        
     if primary_style:
         try:
             # Perform analysis immediately for visuals
-            explorer_results = analyze_explorer_styles(primary_style, secondary_style, CO_OCCURRENCE_DATA)
+            explorer_results = analyze_explorer_styles(
+                primary_style, secondary_style, negative_prompt_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
+            )
             if "error" in explorer_results:
                 st.error(f"Analysis Error: {explorer_results['error']}")
-                # Don't use st.stop() - just display error and return early
             else:
-                # Only show results if no error
                 st.divider() # Divider is now unconditional
 
                 # Charts section in columns
@@ -228,11 +242,55 @@ with tab2:
                         
                         with copy_col:
                             st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
-                            if st.button("📋 Copy", help="Copy prompt to clipboard"):
-                                st.success("Prompt copied! (Ctrl+C from the text area)")
+                            
+                            # Improved copy button with better user guidance
+                            if st.button("📋 Copy", help="Click to select text, then Ctrl+C to copy"):
+                                # Auto-select the text and provide clear instructions
+                                select_script = """
+                                <script>
+                                setTimeout(function() {
+                                    // Find all textareas and select the one with our prompt
+                                    const textareas = document.querySelectorAll('textarea');
+                                    let promptTextarea = null;
+                                    
+                                    for (let textarea of textareas) {
+                                        if (textarea.value && textarea.value.length > 50) {
+                                            promptTextarea = textarea;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (promptTextarea) {
+                                        // Select all text in the prompt textarea
+                                        promptTextarea.focus();
+                                        promptTextarea.select();
+                                        promptTextarea.setSelectionRange(0, promptTextarea.value.length);
+                                        
+                                        // Try to copy automatically
+                                        try {
+                                            const success = document.execCommand('copy');
+                                            if (success) {
+                                                console.log('Auto-copy successful');
+                                            } else {
+                                                console.log('Auto-copy failed, but text is selected');
+                                            }
+                                        } catch (err) {
+                                            console.log('Copy command not available, text is selected for manual copy');
+                                        }
+                                    }
+                                }, 150);
+                                </script>
+                                """
+                                st.components.v1.html(select_script, height=0)
+                                st.success("✅ **Text selected!** Press **Ctrl+C** (or **Cmd+C** on Mac) to copy")
+                                st.info("💡 The prompt text above should now be highlighted. Press Ctrl+C to copy it!")
                         
-                        # Alternative: Show a code block for easy selection
-                        with st.expander("📄 View as selectable text", expanded=False):
+                        # Provide alternative copy method
+                        with st.expander("📄 **Alternative: Copy from code block**", expanded=False):
+                            st.markdown("💡 **If the copy button above doesn't work, use this method:**")
+                            st.markdown("1. Click in the code block below")
+                            st.markdown("2. Press **Ctrl+A** (or **Cmd+A**) to select all")
+                            st.markdown("3. Press **Ctrl+C** (or **Cmd+C**) to copy")
                             st.code(st.session_state.starter_prompt, language=None)
         except Exception as e:
             st.error(f"An unexpected error occurred during analysis: {e}")

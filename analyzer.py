@@ -18,6 +18,8 @@ from style_definitions import STYLE_PERSONALITY_DICT
 PRIMARY_NODE_COLOR = "#FF6347"  # Tomato
 SECONDARY_NODE_COLOR = "#4682B4"  # SteelBlue
 TERTIARY_NODE_COLOR = "#D3D3D3"  # LightGray
+NEGATIVE_NODE_COLOR = "#8B0000"  # DarkRed
+TAINTED_NODE_COLOR = "#FFA500"  # Orange
 BRIDGE_NODE_COLOR = "#32CD32"  # LimeGreen
 ACRONYMS = {"r&b", "k-pop", "j-pop", "edm"}  # Styles to be fully uppercased
 
@@ -237,11 +239,21 @@ def generate_suggestions(cohesion_score: float, recognized_keywords: List[str], 
         }
         return suggestion
 
-def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], co_occurrence_data: Dict) -> Dict:
+def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], negative_prompt_text: Optional[str], creative_direction: Optional[str], co_occurrence_data: Dict) -> Dict:
     """
     Analyzes one or two styles for the Style Explorer mode.
     If a secondary style is provided, it performs a fusion analysis.
     """
+    negative_keywords_set = set()
+    tainted_styles_set = set()
+    if negative_prompt_text:
+        negative_keywords_set = set(extract_keywords(negative_prompt_text, set(co_occurrence_data.keys())))
+        for neg_kw in negative_keywords_set:
+            top_associates = sorted(co_occurrence_data.get(neg_kw, {}).items(), key=lambda x: x[1], reverse=True)[:5]
+            for style, _ in top_associates:
+                tainted_styles_set.add(style)
+        # Ensure tainted set doesn't include the primary negative keywords themselves
+        tainted_styles_set -= negative_keywords_set
     if not secondary_style:
         # --- SINGLE STYLE ANALYSIS (Original Logic) ---
         direct_associations = co_occurrence_data.get(primary_style, {})
