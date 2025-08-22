@@ -1,6 +1,7 @@
 # suno-prompt-analyzer/analyzer.py
 
 import math
+import streamlit as st
 import re
 import networkx as nx
 
@@ -239,6 +240,7 @@ def generate_suggestions(cohesion_score: float, recognized_keywords: List[str], 
         }
         return suggestion
 
+@st.cache_data
 def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], negative_prompt_text: Optional[str], creative_direction: Optional[str], co_occurrence_data: Dict) -> Dict:
     """
     Analyzes one or two styles for the Style Explorer mode.
@@ -376,6 +378,7 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         "creative_brief": creative_brief, # Return the brief, not the final prompt
     }
 # --- Main Orchestrator ---
+@st.cache_data
 def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, default_styles: Set[str], co_occurrence_data: Dict) -> Dict[str, Any]:
     positive_keywords = extract_keywords(prompt_text, default_styles)
     negative_keywords = extract_keywords(negative_prompt_text, default_styles)

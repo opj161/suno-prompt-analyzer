@@ -147,151 +147,82 @@ with tab2:
         )
     gemini_api_key = gemini_api_key_input or os.getenv("GEMINI_API_KEY")
     all_styles_sorted = sorted(list(DEFAULT_STYLES))
-    
-    primary_style = st.selectbox(
-        "**Primary Style:**",
-        options=all_styles_sorted,
-        index=0,
-        placeholder="Search for a primary style..."
-    )
-    
-    col1_exp, col2_exp = st.columns(2)
-    with col1_exp:
-        secondary_style = None
-        if primary_style:
-            secondary_options = [""] + [s for s in all_styles_sorted if s != primary_style]
+
+    with st.form(key='explorer_form'):
+        primary_style = st.selectbox(
+            "**Primary Style:**",
+            options=all_styles_sorted,
+            index=all_styles_sorted.index("rock"),
+            placeholder="Search for a primary style..."
+        )
+        col1_exp, col2_exp = st.columns(2)
+        with col1_exp:
+            secondary_style_options = [""] + [s for s in all_styles_sorted if s != primary_style]
             secondary_style = st.selectbox(
                 "**Secondary Style (for fusion):**",
-                options=secondary_options,
+                options=secondary_style_options,
                 index=0,
                 placeholder="Select a style to blend... (Optional)"
             )
             if secondary_style == "": secondary_style = None
-    
-    with col2_exp:
-        negative_prompt_explorer_input = st.text_input(
-            "**Negative Styles (to push away from):**",
-            placeholder="e.g., pop, upbeat, electronic",
-            help="Specify styles to actively avoid. This will influence the analysis and the final prompt."
-        )
-
-    creative_direction_input = st.text_area(
-        "**Additional Creative Direction (Optional):**",
-        placeholder="e.g., Use a sitar as a lead instrument, theme of a lone wanderer, heavy use of delay effects...",
-        help="Add any specific instructions that are mandatory for the final prompt. These will take priority."
-    )
-        
-    if primary_style:
-        try:
-            # Perform analysis immediately for visuals
-            explorer_results = analyze_explorer_styles(
-                primary_style, secondary_style, negative_prompt_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
+        with col2_exp:
+            negative_prompt_explorer_input = st.text_input(
+                "**Negative Styles (to push away from):**",
+                placeholder="e.g., pop, upbeat, electronic",
+                help="Specify styles to actively avoid. This will influence the analysis and the final prompt."
             )
-            if "error" in explorer_results:
-                st.error(f"Analysis Error: {explorer_results['error']}")
+        creative_direction_input = st.text_area(
+            "**Additional Creative Direction (Optional):**",
+            placeholder="e.g., Use a sitar as a lead instrument, theme of a lone wanderer, heavy use of delay effects...",
+            help="Add any specific instructions that are mandatory for the final prompt. These will take priority."
+        )
+        submit_button = st.form_submit_button("✨ Generate Creative Prompt with Gemini", use_container_width=True)
+
+    if submit_button and primary_style:
+        explorer_results = analyze_explorer_styles(
+            primary_style, secondary_style, negative_prompt_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
+        )
+        if "error" in explorer_results:
+            st.error(f"Analysis Error: {explorer_results['error']}")
+        else:
+            st.divider()
+            col1, col2 = st.columns(2)
+            with col1:
+                chart_title = f"Top Associations for '{format_label(primary_style)}'"
+                if secondary_style:
+                    chart_title += f" & '{format_label(secondary_style)}' Fusion"
+                st.subheader(chart_title)
+                bar_fig = create_ranked_bar_chart(explorer_results['bar_chart_data'], chart_title, "Normalized Association Strength (log scale)")
+                st.plotly_chart(bar_fig, use_container_width=True)
+            with col2:
+                st.subheader("Association Constellation")
+                explorer_graph = create_association_map(explorer_results['graph_data'])
+                html_content = explorer_graph.generate_html()
+                components.html(html_content, height=620, scrolling=True)
+            st.divider()
+            st.subheader("📝 Generated Creative Prompt")
+            if not gemini_api_key:
+                st.warning("Please provide your Gemini API key in the configuration expander above to generate a prompt.")
             else:
-                st.divider() # Divider is now unconditional
-
-                # Charts section in columns
-                col1, col2 = st.columns(2)
-                with col1:
-                    chart_title = f"Top Associations for '{format_label(primary_style)}'"
-                    if secondary_style:
-                        chart_title += f" & '{format_label(secondary_style)}' Fusion"
-                    st.subheader(chart_title)
-                    bar_fig = create_ranked_bar_chart(explorer_results['bar_chart_data'], chart_title, "Normalized Association Strength (log scale)")
-                    st.plotly_chart(bar_fig, use_container_width=True)
-
-                with col2:
-                    st.subheader("Association Constellation")
-                    explorer_graph = create_association_map(explorer_results['graph_data'])
-                    html_content = explorer_graph.generate_html()
-                    components.html(html_content, height=620, scrolling=True)
-
-                # Prompt Starter Kit section - full width
-                st.divider()
-                st.subheader("📝 Prompt Starter Kit")
-                st.info("Click the button below to use Gemini to craft a creative, narrative-style prompt based on the analysis.")
-                
-                if st.button("✨ Generate Creative Prompt with Gemini", key="generate_prompt_btn"):
-                    if not gemini_api_key:
-                        st.warning("Please provide your Gemini API key in the configuration expander above.")
-                    else:
-                        with st.spinner("🤖 Calling the creative co-pilot..."):
-                            st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
-                                explorer_results['creative_brief'], gemini_api_key
-                            )
-                
-                if st.session_state.starter_prompt:
-                    if st.session_state.starter_prompt.startswith("ERROR:"):
-                        st.error(st.session_state.starter_prompt)
-                    else:
-                        st.markdown("**Generated Prompt:**")
-                        
-                        # Create columns for the text area and copy button
-                        prompt_col, copy_col = st.columns([4, 1])
-                        
-                        with prompt_col:
-                            st.text_area(
-                                label="Your Creative Prompt",
-                                value=st.session_state.starter_prompt,
-                                height=150,
-                                help="Copy this prompt and paste it into Suno",
-                                label_visibility="collapsed"
-                            )
-                        
-                        with copy_col:
-                            st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
-                            
-                            # Improved copy button with better user guidance
-                            if st.button("📋 Copy", help="Click to select text, then Ctrl+C to copy"):
-                                # Auto-select the text and provide clear instructions
-                                select_script = """
-                                <script>
-                                setTimeout(function() {
-                                    // Find all textareas and select the one with our prompt
-                                    const textareas = document.querySelectorAll('textarea');
-                                    let promptTextarea = null;
-                                    
-                                    for (let textarea of textareas) {
-                                        if (textarea.value && textarea.value.length > 50) {
-                                            promptTextarea = textarea;
-                                            break;
-                                        }
-                                    }
-                                    
-                                    if (promptTextarea) {
-                                        // Select all text in the prompt textarea
-                                        promptTextarea.focus();
-                                        promptTextarea.select();
-                                        promptTextarea.setSelectionRange(0, promptTextarea.value.length);
-                                        
-                                        // Try to copy automatically
-                                        try {
-                                            const success = document.execCommand('copy');
-                                            if (success) {
-                                                console.log('Auto-copy successful');
-                                            } else {
-                                                console.log('Auto-copy failed, but text is selected');
-                                            }
-                                        } catch (err) {
-                                            console.log('Copy command not available, text is selected for manual copy');
-                                        }
-                                    }
-                                }, 150);
-                                </script>
-                                """
-                                st.components.v1.html(select_script, height=0)
-                                st.success("✅ **Text selected!** Press **Ctrl+C** (or **Cmd+C** on Mac) to copy")
-                                st.info("💡 The prompt text above should now be highlighted. Press Ctrl+C to copy it!")
-                        
-                        # Provide alternative copy method
-                        with st.expander("📄 **Alternative: Copy from code block**", expanded=False):
-                            st.markdown("💡 **If the copy button above doesn't work, use this method:**")
-                            st.markdown("1. Click in the code block below")
-                            st.markdown("2. Press **Ctrl+A** (or **Cmd+A**) to select all")
-                            st.markdown("3. Press **Ctrl+C** (or **Cmd+C**) to copy")
-                            st.code(st.session_state.starter_prompt, language=None)
-        except Exception as e:
-            st.error(f"An unexpected error occurred during analysis: {e}")
-            # Don't use st.stop() - just display error
+                with st.spinner("🤖 Calling the creative co-pilot..."):
+                    st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
+                        explorer_results['creative_brief'], gemini_api_key
+                    )
+            if st.session_state.starter_prompt:
+                if st.session_state.starter_prompt.startswith("ERROR:"):
+                    st.error(st.session_state.starter_prompt)
+                else:
+                    prompt_col, copy_col = st.columns([4, 1])
+                    with prompt_col:
+                        st.text_area(
+                            label="Your Creative Prompt",
+                            value=st.session_state.starter_prompt,
+                            height=150,
+                            help="Copy this prompt and paste it into Suno",
+                            label_visibility="collapsed"
+                        )
+                    with copy_col:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.button("📋 Copy", help="Click to copy the prompt to your clipboard.", on_click=None)
+                    with st.expander("📄 **Alternative: Copy from code block**", expanded=False):
+                        st.code(st.session_state.starter_prompt, language=None)
