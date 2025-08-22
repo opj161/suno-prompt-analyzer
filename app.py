@@ -157,7 +157,9 @@ with tab2:
         )
         col1_exp, col2_exp = st.columns(2)
         with col1_exp:
-            secondary_style_options = [""] + [s for s in all_styles_sorted if s != primary_style]
+            # Note: A secondary style selector inside a form can be tricky if its options depend on the primary style.
+            # For a better UX, we'll keep the full list and let the analysis handle the case where they are the same.
+            secondary_style_options = [""] + all_styles_sorted
             secondary_style = st.selectbox(
                 "**Secondary Style (for fusion):**",
                 options=secondary_style_options,
@@ -176,7 +178,7 @@ with tab2:
             placeholder="e.g., Use a sitar as a lead instrument, theme of a lone wanderer, heavy use of delay effects...",
             help="Add any specific instructions that are mandatory for the final prompt. These will take priority."
         )
-        submit_button = st.form_submit_button("✨ Generate Creative Prompt with Gemini", use_container_width=True)
+        submit_button = st.form_submit_button("✨ Analyze & Generate Prompt Kit", use_container_width=True)
 
     if submit_button and primary_style:
         explorer_results = analyze_explorer_styles(
@@ -208,21 +210,16 @@ with tab2:
                     st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
                         explorer_results['creative_brief'], gemini_api_key
                     )
-            if st.session_state.starter_prompt:
+            if 'starter_prompt' in st.session_state and st.session_state.starter_prompt:
                 if st.session_state.starter_prompt.startswith("ERROR:"):
                     st.error(st.session_state.starter_prompt)
                 else:
-                    prompt_col, copy_col = st.columns([4, 1])
-                    with prompt_col:
-                        st.text_area(
-                            label="Your Creative Prompt",
-                            value=st.session_state.starter_prompt,
-                            height=150,
-                            help="Copy this prompt and paste it into Suno",
-                            label_visibility="collapsed"
-                        )
-                    with copy_col:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        st.button("📋 Copy", help="Click to copy the prompt to your clipboard.", on_click=None)
-                    with st.expander("📄 **Alternative: Copy from code block**", expanded=False):
+                    st.text_area(
+                        label="Your Creative Prompt",
+                        value=st.session_state.starter_prompt,
+                        height=150,
+                        help="Copy this prompt and paste it into Suno",
+                        label_visibility="collapsed"
+                    )
+                    with st.expander("📄 **Copy from code block (Recommended)**"):
                         st.code(st.session_state.starter_prompt, language=None)
