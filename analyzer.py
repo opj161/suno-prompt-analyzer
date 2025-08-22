@@ -83,45 +83,76 @@ GEMINI_SYSTEM_INSTRUCTION = """You are an expert AI music prompt engineer specia
     *   **Vocal Production:** Describe how the vocals are treated and placed within the mix to serve the song's emotional intent.
 
     You MUST generate a novel, descriptive combination of these elements. This is a test of your creative and technical vocabulary.
+
+7.  **Handle Creative Constraints**: When the brief provides a "Creative Goal" to steer away from certain qualities, your task is not simply to omit words. You must actively construct the narrative prompt using contrasting and opposing descriptive language. Use the "Emphasize" list to build the core of your prompt and the "Steer Away From" list as a guide for what sonic textures to describe in opposition.
 """
 
 def generate_polished_prompt_with_gemini(creative_brief: str, api_key: str) -> str:
-    """Calls the Gemini API to generate a polished Suno prompt, with robust error handling and all safety filters disabled."""
+    """
+    Calls the Gemini API to generate a polished Suno prompt, with robust error handling
+    and all safety filters disabled as per the application's design.
+    """
     try:
         client = genai.Client(api_key=api_key)
-        logging.info("Attempting to generate content with Gemini API.")
-        logging.warning("All Gemini API safety filters are disabled for this call.")
+        logging.info("Attempting to generate content with Gemini 2.5 Pro.")
+        logging.warning("All Gemini API safety filters are being disabled for this call.")
 
-        # Correctly construct the safety_settings as a list of SafetySetting objects
+        # CORRECTED: Use snake_case for all parameters in GenerateContentConfig.
+        # CORRECTED: Completed the list of safety categories to include all five adjustable filters.
+        # This ensures all safety measures are explicitly set to BLOCK_NONE.
         safety_settings = [
-            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold=types.HarmBlockThreshold.BLOCK_NONE),
         ]
 
+        # CORRECTED: All parameters now use snake_case as required by the Python SDK documentation.
         generation_config = types.GenerateContentConfig(
             system_instruction=GEMINI_SYSTEM_INSTRUCTION,
             temperature=0.7, # Add a little creativity
-            safety_settings=safety_settings
+            safety_settings=safety_settings,
+            # This is set correctly to disable tool use, as we only need text generation.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=creative_brief,
-            config=generation_config,
-        )
+        # Add retry logic for 500 errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # The model is correctly set to 'gemini-2.5-pro' per the user's instructions.
+                response = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=creative_brief,
+                    config=generation_config,
+                )
+                break  # Success, exit retry loop
+            except errors.ServerError as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logging.warning(f"Gemini API 500 error (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Final attempt failed
+                    logging.error(f"Gemini API failed after {max_retries} attempts: {e}")
+                    return f"ERROR: Gemini API server error after {max_retries} attempts. The service may be temporarily unavailable."
+            except errors.BlockedPromptError as e:
+                # This handles cases where the response is blocked despite relaxed settings (e.g., core harms)
+                logging.error(f"Gemini API call failed: Prompt was blocked. Reason: {e}")
+                return f"ERROR: Your prompt was blocked for violating core safety policies which cannot be disabled. Reason: {e}"
+            except Exception as e:
+                # Non-retriable errors will be raised immediately
+                logging.error(f"A non-retriable Gemini API error occurred: {e}", exc_info=True)
+                return f"ERROR: A Gemini API error occurred: {str(e)}"
 
-        logging.info(f"Gemini API Response: {response}")
+        logging.info(f"Gemini API Response received successfully")
 
         if not response.candidates:
-            block_reason = "No candidates in response, which is unexpected with safety filters disabled. Check for other prompt issues."
-            if response.prompt_feedback and response.prompt_feedback.block_reason:
-                block_reason = f"Prompt blocked for a non-safety reason: {response.prompt_feedback.block_reason.name}"
-            
-            logging.error(f"Gemini API call failed: {block_reason}")
-            st.exception(RuntimeError(f"Gemini API Error: {block_reason}. See terminal for details."))
-            return f"ERROR: The prompt was blocked by the API for a non-safety reason: {block_reason}. Please modify your creative brief."
+            logging.error("No candidates in response - unexpected with safety filters disabled")
+            return "ERROR: No response candidates generated. Please try modifying your creative brief."
             
         candidate = response.candidates[0]
         
@@ -129,21 +160,19 @@ def generate_polished_prompt_with_gemini(creative_brief: str, api_key: str) -> s
             logging.warning(f"Gemini response finished with reason: {candidate.finish_reason.name}")
             return f"ERROR: The AI response was incomplete. Finish Reason: {candidate.finish_reason.name}. Please try again."
 
-        if candidate.content and candidate.content.parts and candidate.content.parts[0].text:
-             return candidate.content.parts[0].text
-        else:
-            logging.error("Gemini API call failed: No text content in the response.")
-            st.exception(RuntimeError("Gemini API Error: No text content found in the response. See terminal for details."))
-            return "ERROR: Received an empty response from the AI. This might be a temporary issue. Please try again later."
+        # SIMPLIFIED: Directly use the 'response.text' property as shown in all documentation examples.
+        # This is the idiomatic and most reliable way to get the full text output.
+        # The SDK handles aggregating the parts for you.
+        try:
+            return response.text
+        except Exception as e:
+            logging.error(f"Failed to access response.text: {e}", exc_info=True)
+            return f"ERROR: Failed to retrieve response content: {str(e)}"
 
-    except errors.APIError as e:
-        logging.error(f"Gemini API Error: {e}")
-        st.exception(e)
-        return f"ERROR: Gemini API Error - {e.message}"
     except Exception as e:
-        logging.error(f"An unexpected error occurred while contacting Gemini: {e}")
+        logging.error(f"An unexpected error occurred during Gemini client setup or call: {e}", exc_info=True)
         st.exception(e)
-        return f"ERROR: An unexpected error occurred while contacting Gemini: {str(e)}"
+        return f"ERROR: An unexpected application error occurred: {str(e)}"
 
 def orchestrate_gemini_prompt_generation(creative_brief: str, api_key: str) -> str:
     """
@@ -160,8 +189,18 @@ def orchestrate_gemini_prompt_generation(creative_brief: str, api_key: str) -> s
 
 
 # --- Helper Functions ---
+
 def format_label(style: str) -> str:
     return style.upper() if style in ACRONYMS else style.title()
+
+def _get_style_adjectives(styles: List[str]) -> Set[str]:
+    """Helper function to retrieve unique adjectives for a list of styles."""
+    adjectives = set()
+    for style in styles:
+        personality = STYLE_PERSONALITY_DICT.get(style, {})
+        if "adjectives" in personality:
+            adjectives.update(personality["adjectives"])
+    return adjectives
 
 def create_annotated_prompt_html(prompt_text: str, recognized_keywords: List[str], co_occurrence_data: Dict) -> str:
     """
@@ -287,21 +326,12 @@ def generate_suggestions(cohesion_score: float, recognized_keywords: List[str], 
         return suggestion
 
 @st.cache_data
-def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], negative_prompt_text: Optional[str], creative_direction: Optional[str], co_occurrence_data: Dict) -> Dict:
+def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], negative_keywords: Optional[List[str]], creative_direction: Optional[str], co_occurrence_data: Dict) -> Dict:
     """
     Analyzes one or two styles for the Style Explorer mode.
     If a secondary style is provided, it performs a fusion analysis.
     """
-    negative_keywords_set = set()
-    tainted_styles_set = set()
-    if negative_prompt_text:
-        negative_keywords_set = set(extract_keywords(negative_prompt_text, set(co_occurrence_data.keys())))
-        for neg_kw in negative_keywords_set:
-            top_associates = sorted(co_occurrence_data.get(neg_kw, {}).items(), key=lambda x: x[1], reverse=True)[:5]
-            for style, _ in top_associates:
-                tainted_styles_set.add(style)
-        # Ensure tainted set doesn't include the primary negative keywords themselves
-        tainted_styles_set -= negative_keywords_set
+    negative_keywords_set = set(negative_keywords) if negative_keywords else set()
     if not secondary_style:
         # --- SINGLE STYLE ANALYSIS (Original Logic) ---
         direct_associations = co_occurrence_data.get(primary_style, {})
@@ -333,30 +363,36 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
 
         graph_data = {"nodes": nodes, "edges": edges}
 
-        # --- PROMPT STARTER KIT (Single Style) - COMPILE BRIEF FOR GEMINI ---
-        top_associated_styles = [style for style, score in sorted_assocs[:15]]
-        personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
-        top_moods = [m for m in top_associated_styles if m in MOOD_KEYWORDS][:3]
-        top_instruments = [i for i in top_associated_styles if i in INSTRUMENT_KEYWORDS][:3]
-        top_vocals = [v for v in top_associated_styles if v in VOCAL_KEYWORDS][:2]
-
-        # Build additional sections for negative styles and creative direction
-        negative_section = ""
-        if negative_keywords_set:
-            negative_section = f"\n        **Negative Styles (AVOID these):** {', '.join(negative_keywords_set)}"
+        # --- PROMPT STARTER KIT (Single Style) - COMPILE ENHANCED BRIEF FOR GEMINI ---
+        positive_adjectives = _get_style_adjectives([primary_style])
         
-        creative_direction_section = ""
-        if creative_direction and creative_direction.strip():
-            creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}"
+        creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}" if creative_direction and creative_direction.strip() else ""
 
-        creative_brief = f"""
+        if negative_keywords_set:
+            negative_adjectives = _get_style_adjectives(list(negative_keywords_set))
+            creative_brief = f"""
+        **Primary Style:** {primary_style}
+        **Creative Goal:** To generate a '{primary_style}' prompt that actively avoids the sensibilities of '{', '.join(negative_keywords_set)}'.
+        **Emphasize These '{primary_style.title()}' Qualities:** {', '.join(positive_adjectives) or 'N/A'}
+        **Steer Away From These Qualities:** {', '.join(negative_adjectives) or 'N/A'}{creative_direction_section}
+        **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt. Your primary goal is to find a creative angle that embodies the core '{primary_style}' qualities while actively contrasting with the specified negative qualities. Follow all rules from your system instruction.
+            """.strip()
+        else:
+            # Brief without negative styles
+            top_associated_styles = [style for style, score in sorted_assocs[:15]]
+            top_moods = [m for m in top_associated_styles if m in MOOD_KEYWORDS][:3]
+            top_instruments = [i for i in top_associated_styles if i in INSTRUMENT_KEYWORDS][:3]
+            top_vocals = [v for v in top_associated_styles if v in VOCAL_KEYWORDS][:2]
+            personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
+            
+            creative_brief = f"""
         **Primary Style:** {primary_style}
         **Personality:** {personality}
         **Key Associated Moods:** {', '.join(top_moods) or 'N/A'}
         **Key Associated Instruments:** {', '.join(top_instruments) or 'N/A'}
-        **Key Associated Vocals:** {', '.join(top_vocals) or 'N/A'}{negative_section}{creative_direction_section}
+        **Key Associated Vocals:** {', '.join(top_vocals) or 'N/A'}{creative_direction_section}
         **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt. Your goal is to expand upon the core identity of the primary style, using the associated concepts to create a rich, vivid, and compelling narrative description for a song. Follow all rules from your system instruction.
-        """.strip()
+            """.strip()
 
     else:
         # --- FUSION ANALYSIS ---
@@ -403,25 +439,24 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         graph_data = {"nodes": nodes, "edges": edges}
 
         # --- PROMPT STARTER KIT (Fusion) - COMPILE BRIEF FOR GEMINI ---
-        p1_personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
-        p2_personality = STYLE_PERSONALITY_DICT.get(secondary_style, {})
+        positive_adjectives = _get_style_adjectives([primary_style, secondary_style])
+        creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}" if creative_direction and creative_direction.strip() else ""
 
-        combined_instruments = list(dict.fromkeys(
-            ([p for p in [primary_style, secondary_style] if p in INSTRUMENT_KEYWORDS]) +
-            ([i for i in top_assocs_a if i in INSTRUMENT_KEYWORDS][:2]) +
-            ([i for i in top_assocs_b if i in INSTRUMENT_KEYWORDS][:2])
-        ))[:3]
-        
-        # Build additional sections for negative styles and creative direction
-        negative_section = ""
         if negative_keywords_set:
-            negative_section = f"\n        **Negative Styles (AVOID these):** {', '.join(negative_keywords_set)}"
-        
-        creative_direction_section = ""
-        if creative_direction and creative_direction.strip():
-            creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}"
-        
-        creative_brief = f"""
+            negative_adjectives = _get_style_adjectives(list(negative_keywords_set))
+            creative_brief = f"""
+        **Primary Style 1:** {primary_style}
+        **Primary Style 2:** {secondary_style}
+        **Creative Goal:** To fuse '{primary_style}' and '{secondary_style}' while actively avoiding the sensibilities of '{', '.join(negative_keywords_set)}'.
+        **Emphasize These Combined Qualities:** {', '.join(positive_adjectives) or 'N/A'}
+        **Steer Away From These Qualities:** {', '.join(negative_adjectives) or 'N/A'}{creative_direction_section}
+        **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt. Your primary goal is to find a creative angle to fuse the two styles, resolving their contradictions into a believable and compelling musical idea, while actively contrasting with the specified negative qualities. Follow all rules from your system instruction.
+            """.strip()
+        else:
+            # Brief for fusion without negative styles
+            p1_personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
+            p2_personality = STYLE_PERSONALITY_DICT.get(secondary_style, {})
+            creative_brief = f"""
         **Primary Style 1:** {primary_style}
         *   **Personality:** {p1_personality}
 
@@ -431,7 +466,7 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         **Contradiction to Resolve:** The core challenge is to blend the potentially conflicting personalities, moods, and aesthetics of {primary_style} and {secondary_style}.
 
         **Bridge Nodes (Shared Influences):** {', '.join(bridge_nodes) or 'None found, a true experimental fusion.'}
-        **Key Combined Instruments:** {', '.join(combined_instruments) or 'N/A'}{negative_section}{creative_direction_section}
+        **Combined Adjectives to Inspire Fusion:** {', '.join(positive_adjectives) or 'N/A'}{creative_direction_section}
 
         **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt following all rules from your system instruction. Your primary goal is to find a creative angle to fuse the two styles, resolving their contradictions into a believable and compelling musical idea.
         """.strip()
@@ -444,9 +479,8 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
     }
 # --- Main Orchestrator ---
 @st.cache_data
-def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, default_styles: Set[str], co_occurrence_data: Dict) -> Dict[str, Any]:
+def prepare_analysis_results(prompt_text: str, negative_keywords: List[str], default_styles: Set[str], co_occurrence_data: Dict) -> Dict[str, Any]:
     positive_keywords = extract_keywords(prompt_text, default_styles)
-    negative_keywords = extract_keywords(negative_prompt_text, default_styles)
     negative_keywords_set = set(negative_keywords)
 
     # Ensure keywords are not in both positive and negative lists (negative wins)
@@ -456,38 +490,23 @@ def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, defaul
         return {"recognized_keywords": [], "error": "No valid Suno styles were found in the prompt."}
 
     # 1. Analyze the positive prompt in its original state
-    base_influence_scores = calculate_influence_scores(positive_keywords, co_occurrence_data)
+
+    # NOTE: The "Repulsive Force" logic has been removed. All analysis now uses the original, un-penalized scores.
+    # This provides a more accurate and less misleading representation of the data.
+    influence_scores = calculate_influence_scores(positive_keywords, co_occurrence_data)
+    
+    # Calculate cohesion score for suggestions
     cohesion_score = calculate_cohesion(positive_keywords, co_occurrence_data)
-    annotated_html = create_annotated_prompt_html(prompt_text, positive_keywords, co_occurrence_data)
 
-    base_normalized_scores = {
-        style: math.log10(score + 1)
-        for style, score in base_influence_scores.items()
-        if style not in positive_keywords
-    }
-    base_sorted_influences = sorted(base_normalized_scores.items(), key=lambda item: item[1], reverse=True)
-
-    # 3. Apply the "Repulsive Force" from negative keywords
-    penalized_influence_scores = base_influence_scores.copy()
-    penalty_factor = 0.1  # 90% reduction
-    tainted_styles = set()
-    for neg_kw in negative_keywords:
-        # Taint the top 5 closest associates of each negative keyword
-        top_associates = sorted(co_occurrence_data.get(neg_kw, {}).items(), key=lambda x: x[1], reverse=True)[:5]
-        for style, weight in top_associates:
-            tainted_styles.add(style)
-
-    for style in tainted_styles:
-        if style in penalized_influence_scores:
-            penalized_influence_scores[style] *= penalty_factor
-    for neg_kw in negative_keywords:
-        if neg_kw in penalized_influence_scores:
-            penalized_influence_scores[neg_kw] = 0
+    # Filter out negative keywords from the final influence scores before display
+    for neg_kw in negative_keywords_set:
+        if neg_kw in influence_scores:
+            del influence_scores[neg_kw]
 
     normalized_scores = {
         style: math.log10(score + 1)
-        for style, score in penalized_influence_scores.items()
-        if style not in positive_keywords and style not in negative_keywords_set
+        for style, score in influence_scores.items()
+        if style not in positive_keywords
     }
     
     sorted_influences = sorted(normalized_scores.items(), key=lambda item: item[1], reverse=True)
@@ -495,6 +514,9 @@ def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, defaul
 
     # 4. Generate suggestions based on the final, penalized data
     suggestion = generate_suggestions(cohesion_score, positive_keywords, sorted_influences, co_occurrence_data)
+    
+    # 5. Create annotated HTML for the prompt
+    annotated_html = create_annotated_prompt_html(prompt_text, positive_keywords, co_occurrence_data)
     
     nodes, edges = [], []
     node_ids = set()
@@ -512,7 +534,7 @@ def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, defaul
         if style in top_associated_styles_for_graph and style not in node_ids:
             size_ratio = (score - min_log_score) / (max_log_score - min_log_score) if max_log_score > min_log_score else 0
             node_size = 12 + (8 * size_ratio)
-            nodes.append({"id": style, "label": format_label(style), "size": node_size, "color": SECONDARY_NODE_COLOR, "title": f"Penalized Influence Score: {penalized_influence_scores.get(style, 0):,.0f}"})
+            nodes.append({"id": style, "label": format_label(style), "size": node_size, "color": SECONDARY_NODE_COLOR, "title": f"Influence Score: {influence_scores.get(style, 0):,.0f}"})
             node_ids.add(style)
 
     for keyword in positive_keywords:

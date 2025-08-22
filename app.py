@@ -32,6 +32,9 @@ if 'prompt_text' not in st.session_state:
 if 'starter_prompt' not in st.session_state:
     st.session_state.starter_prompt = None
 
+# Create sorted styles list for use in both tabs
+all_styles_sorted = sorted(list(DEFAULT_STYLES))
+
 tab1, tab2 = st.tabs(["**Prompt Analyzer**", "**Style Explorer**"])
 
 with tab1:
@@ -44,9 +47,10 @@ with tab1:
             value=st.session_state.prompt_text,
             height=150,
         )
-        negative_prompt_input = st.text_input(
-            "Negative Keywords (comma-separated):",
-            placeholder="e.g., rock, pop, guitar",
+        negative_keywords_input = st.multiselect(
+            "Negative Keywords:",
+            options=all_styles_sorted,
+            placeholder="Select styles to exclude...",
             help="Keywords to exclude and steer the model away from."
         )
         submit_button = st.form_submit_button(label='Analyze Prompt')
@@ -58,7 +62,7 @@ with tab1:
             del st.session_state.explorer_results
         if prompt_text_input:
             analysis_results = prepare_analysis_results(
-                prompt_text_input, negative_prompt_input, DEFAULT_STYLES, CO_OCCURRENCE_DATA
+                prompt_text_input, negative_keywords_input, DEFAULT_STYLES, CO_OCCURRENCE_DATA
             )
             st.session_state.analysis_results = analysis_results
         else:
@@ -149,7 +153,6 @@ with tab2:
             key="gemini_api_key_input"
         )
     gemini_api_key = gemini_api_key_input or os.getenv("GEMINI_API_KEY")
-    all_styles_sorted = sorted(list(DEFAULT_STYLES))
 
     with st.form(key='explorer_form'):
         primary_style = st.selectbox(
@@ -171,11 +174,16 @@ with tab2:
             )
             if secondary_style == "": secondary_style = None
         with col2_exp:
-            negative_prompt_explorer_input = st.text_input(
+            negative_keywords_explorer_input = st.multiselect(
                 "**Negative Styles (to push away from):**",
-                placeholder="e.g., pop, upbeat, electronic",
-                help="Specify styles to actively avoid. This will influence the analysis and the final prompt."
+                options=all_styles_sorted,
+                placeholder="Select styles to avoid...",
+                help="Specify styles to actively avoid. This will influence the generated creative prompt."
             )
+        st.info(
+            "**Note:** Negative styles guide the AI prompt generation. They do not filter or change the association analysis shown below.",
+            icon="💡"
+        )
         creative_direction_input = st.text_area(
             "**Additional Creative Direction (Optional):**",
             placeholder="e.g., Use a sitar as a lead instrument, theme of a lone wanderer, heavy use of delay effects...",
@@ -197,7 +205,7 @@ with tab2:
 
         # Store results in session state instead of a local variable
         st.session_state.explorer_results = analyze_explorer_styles(
-            primary_style, secondary_style, negative_prompt_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
+            primary_style, secondary_style, negative_keywords_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
         )
 
     # Render results if they exist in the session state
