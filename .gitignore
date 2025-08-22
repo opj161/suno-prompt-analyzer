@@ -1,7 +1,8 @@
-__pycache__/*
+__pycache__*
 suno-prompt-analyzer.xml
 .env
 .streamlit/secrets.toml
 __pycache__/analyzer.cpython-313.pyc
 __pycache__/data_loader.cpython-313.pyc
 __pycache__/visualizer.cpython-313.pyc
+__pycache__/analyzer.cpython-313.pyc
