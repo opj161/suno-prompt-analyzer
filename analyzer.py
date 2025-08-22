@@ -1,6 +1,7 @@
 # suno-prompt-analyzer/analyzer.py
 
 import math
+import logging
 import streamlit as st
 import re
 import networkx as nx
@@ -13,6 +14,9 @@ from google.genai import errors
 from itertools import combinations
 from collections import defaultdict
 from typing import List, Set, Dict, Any, Optional
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 from style_definitions import STYLE_PERSONALITY_DICT
 
 # --- Constants ---
@@ -82,21 +86,63 @@ GEMINI_SYSTEM_INSTRUCTION = """You are an expert AI music prompt engineer specia
 """
 
 def generate_polished_prompt_with_gemini(creative_brief: str, api_key: str) -> str:
-    """Calls the Gemini 2.5 Pro API to generate a polished Suno prompt."""
+    """Calls the Gemini API to generate a polished Suno prompt, with robust error handling and all safety filters disabled."""
     try:
         client = genai.Client(api_key=api_key)
+        logging.info("Attempting to generate content with Gemini API.")
+        logging.warning("All Gemini API safety filters are disabled for this call.")
+
+        # Correctly construct the safety_settings as a list of SafetySetting objects
+        safety_settings = [
+            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
+        ]
+
+        generation_config = types.GenerateContentConfig(
+            system_instruction=GEMINI_SYSTEM_INSTRUCTION,
+            temperature=0.7, # Add a little creativity
+            safety_settings=safety_settings
+        )
+
         response = client.models.generate_content(
             model="gemini-2.5-pro",
             contents=creative_brief,
-            config=types.GenerateContentConfig(
-                system_instruction=GEMINI_SYSTEM_INSTRUCTION,
-                temperature=0.7 # Add a little creativity
-            ),
+            config=generation_config,
         )
-        return response.text
+
+        logging.info(f"Gemini API Response: {response}")
+
+        if not response.candidates:
+            block_reason = "No candidates in response, which is unexpected with safety filters disabled. Check for other prompt issues."
+            if response.prompt_feedback and response.prompt_feedback.block_reason:
+                block_reason = f"Prompt blocked for a non-safety reason: {response.prompt_feedback.block_reason.name}"
+            
+            logging.error(f"Gemini API call failed: {block_reason}")
+            st.exception(RuntimeError(f"Gemini API Error: {block_reason}. See terminal for details."))
+            return f"ERROR: The prompt was blocked by the API for a non-safety reason: {block_reason}. Please modify your creative brief."
+            
+        candidate = response.candidates[0]
+        
+        if candidate.finish_reason.name != "STOP":
+            logging.warning(f"Gemini response finished with reason: {candidate.finish_reason.name}")
+            return f"ERROR: The AI response was incomplete. Finish Reason: {candidate.finish_reason.name}. Please try again."
+
+        if candidate.content and candidate.content.parts and candidate.content.parts[0].text:
+             return candidate.content.parts[0].text
+        else:
+            logging.error("Gemini API call failed: No text content in the response.")
+            st.exception(RuntimeError("Gemini API Error: No text content found in the response. See terminal for details."))
+            return "ERROR: Received an empty response from the AI. This might be a temporary issue. Please try again later."
+
     except errors.APIError as e:
+        logging.error(f"Gemini API Error: {e}")
+        st.exception(e)
         return f"ERROR: Gemini API Error - {e.message}"
     except Exception as e:
+        logging.error(f"An unexpected error occurred while contacting Gemini: {e}")
+        st.exception(e)
         return f"ERROR: An unexpected error occurred while contacting Gemini: {str(e)}"
 
 def orchestrate_gemini_prompt_generation(creative_brief: str, api_key: str) -> str:
