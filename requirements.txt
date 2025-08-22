@@ -2,3 +2,6 @@ streamlit
 google-genai
 python-dotenv
 pathlib
+networkx
+plotly
+pyvis
