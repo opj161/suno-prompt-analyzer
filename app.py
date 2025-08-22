@@ -3,10 +3,15 @@
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import our custom modules
 from data_loader import load_suno_data
-from analyzer import prepare_analysis_results, analyze_explorer_styles, format_label
+from analyzer import prepare_analysis_results, analyze_explorer_styles, orchestrate_gemini_prompt_generation, format_label
 from visualizer import create_ranked_bar_chart, create_association_map
 
 # --- 1. PAGE CONFIGURATION ---
@@ -24,6 +29,8 @@ st.divider()
 # Initialize session state for persistent prompt text ONCE
 if 'prompt_text' not in st.session_state:
     st.session_state.prompt_text = "A powerful acoustic folk ballad in a minor key with a deeply reflective and intimate feel and a slow and deliberate adagio tempo. The primary instrumentation is a clean fingerpicked acoustic guitar playing intricate arpeggiated chords with a mournful cello providing sustained counter-melodies, a subtle atmospheric string section, and a sparse piano adding depth and flowing texture. The production features modern professional mastering with studio-grade fidelity, exceptional warmth and clarity, a natural reverb on the instruments, and a clean mix with no harsh highs. Powerful, increasingly intense and epic. Professional mastering."
+if 'starter_prompt' not in st.session_state:
+    st.session_state.starter_prompt = None
 
 tab1, tab2 = st.tabs(["**Prompt Analyzer**", "**Style Explorer**"])
 
@@ -62,71 +69,83 @@ with tab1:
         if results.get("error"):
             st.error(results["error"])
         else:
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.subheader("Interactive Prompt Inspector")
-                inspector_css = """
-                <style>
-                    .highlight-keyword { background-color: rgba(255, 127, 80, 0.3); border-radius: 4px; padding: 2px 4px; position: relative; cursor: pointer; }
-                    .highlight-keyword:hover::after { content: attr(data-tooltip); position: absolute; left: 0; top: 120%; z-index: 100; background-color: #222; color: #fff; border: 1px solid #444; border-radius: 5px; padding: 10px; font-family: monospace; font-size: 0.9em; white-space: pre-wrap; min-width: 250px; text-align: left; }
-                    .neg-tag { display: inline-block; background-color: #400; color: #f88; padding: 4px 8px; margin: 2px; border-radius: 5px; font-family: monospace; font-size: 0.9em; }
-                    .tag { display: inline-block; background-color: #334; color: #afa; padding: 4px 8px; margin: 2px; border-radius: 5px; font-family: monospace; font-size: 0.9em; }
-                </style>
-                """
-                st.markdown(inspector_css + f"<div style='border: 1px solid #333; padding: 10px; border-radius: 5px;'>{results['annotated_html']}</div>", unsafe_allow_html=True)
-                
-                st.metric(label="Keyword Cohesion Score", value=f"{results['cohesion_score']:.1f} / 100", help="Measures how strongly your keywords are related. Higher is better.")
+            # --- NEW LAYOUT: TOP ROW METRICS ---
+            metric1, metric2, metric3 = st.columns(3)
+            with metric1:
+                st.metric(label="Keyword Cohesion Score", value=f"{results['cohesion_score']:.1f}/100", help="Measures how strongly your keywords are related. Higher is better.")
                 score = results['cohesion_score']
                 if score >= 75: st.success("✓ Excellent Cohesion")
                 elif score >= 40: st.warning("! Moderate Cohesion")
                 else: st.error("✗ Low Cohesion")
-                
-                if results['negative_keywords']:
-                    st.markdown("<b>Applied Negative Keywords</b>", unsafe_allow_html=True)
-                    neg_keywords_html = "".join([f"<span class='neg-tag'>{kw}</span>" for kw in results['negative_keywords']])
-                    st.markdown(neg_keywords_html, unsafe_allow_html=True)
-                
-                st.divider()
-                st.subheader("🤖 Prompt Co-Pilot")
-                suggestion = results.get("suggestion")
-                if suggestion:
-                    with st.expander(f"{suggestion['title']}", expanded=True):
-                        body = suggestion.get('body', {})
-                        if body.get('intro'): st.write(body['intro'])
-                        if body.get('clusters'):
-                            for i, cluster in enumerate(body['clusters']):
-                                cluster_html = "".join([f"<span class='tag'>{kw}</span>" for kw in cluster])
-                                st.markdown(f"**Cluster {i+1}:** {cluster_html}", unsafe_allow_html=True)
-                        if body.get('strategies'):
-                            for title, points in body['strategies'].items():
-                                st.markdown(f"--- \n**{title}**")
-                                for point in points: st.markdown(f"- {point}")
-                        elif body.get('suggestions'): st.markdown(" ".join(body['suggestions']))
+            with metric2:
+                st.metric(label="Recognized Keywords", value=len(results['recognized_keywords']))
+            with metric3:
+                st.metric(label="Negative Keywords", value=len(results['negative_keywords']))
 
-            with col2:
-                st.subheader("Stylistic Fingerprint")
-                fingerprint_fig = create_ranked_bar_chart(
+            st.divider()
+            # --- NEW LAYOUT: FULL-WIDTH INSPECTOR ---
+            st.subheader("Interactive Prompt Inspector")
+            inspector_css = """
+            <style>
+                .highlight-keyword { background-color: rgba(255, 127, 80, 0.3); border-radius: 4px; padding: 2px 4px; position: relative; cursor: pointer; }
+                .highlight-keyword:hover::after { content: attr(data-tooltip); position: absolute; left: 0; top: 120%; z-index: 100; background-color: #222; color: #fff; border: 1px solid #444; border-radius: 5px; padding: 10px; font-family: monospace; font-size: 0.9em; white-space: pre-wrap; min-width: 250px; text-align: left; }
+                .neg-tag { display: inline-block; background-color: #400; color: #f88; padding: 4px 8px; margin: 2px; border-radius: 5px; font-family: monospace; font-size: 0.9em; }
+                .tag { display: inline-block; background-color: #334; color: #afa; padding: 4px 8px; margin: 2px; border-radius: 5px; font-family: monospace; font-size: 0.9em; }
+            </style>
+            """
+            st.markdown(inspector_css + f"<div style='border: 1px solid #333; padding: 10px; border-radius: 5px;'>{results['annotated_html']}</div>", unsafe_allow_html=True)
+            st.divider()
+
+            # --- NEW LAYOUT: TABBED DETAILS ---
+            detail_tab1, detail_tab2, detail_tab3 = st.tabs(["📊 **Stylistic Fingerprint**", "🕸️ **Association Map**", "🤖 **Co-Pilot Suggestions**"])
+            with detail_tab1:
+                st.plotly_chart(create_ranked_bar_chart(
                     results['fingerprint'], "Top 10 Stylistic Influences", "Normalized Influence Score (log scale)"
-                )
-                st.plotly_chart(fingerprint_fig, use_container_width=True)
-
-                st.divider()
-                st.subheader("Interactive Association Map")
-                edge_threshold = st.slider(
-                    "Minimum Connection Strength (log scale):", min_value=0.0, max_value=15.0, value=7.0, step=0.5,
-                    help="Hides weaker connections to declutter the graph.", key="analyzer_edge_slider"
-                )
+                ), use_container_width=True)
+            
+            with detail_tab2:
+                edge_threshold = st.slider("Connection Strength:", 0.0, 15.0, 7.0, 0.5, key="analyzer_edge_slider")
                 filtered_graph_data = results['graph_data'].copy()
                 filtered_graph_data['edges'] = [edge for edge in filtered_graph_data['edges'] if edge['value'] >= edge_threshold]
-                network_graph = create_association_map(filtered_graph_data)
-                html_content = network_graph.generate_html()
-                components.html(html_content, height=620, scrolling=True)
+                components.html(create_association_map(filtered_graph_data).generate_html(), height=620, scrolling=True)
+
+            with detail_tab3:
+                suggestion = results.get("suggestion")
+                if suggestion:
+                    st.subheader(suggestion['title'])
+                    body = suggestion.get('body', {})
+                    if body.get('intro'): st.write(body['intro'])
+                    if body.get('clusters'):
+                        for i, cluster in enumerate(body['clusters']):
+                            cluster_html = "".join([f"<span class='tag'>{kw}</span>" for kw in cluster])
+                            st.markdown(f"**Cluster {i+1}:** {cluster_html}", unsafe_allow_html=True)
+                    if body.get('strategies'):
+                        for title, points in body['strategies'].items():
+                            st.markdown(f"--- \n**{title}**")
+                            for point in points: st.markdown(f"- {point}")
+                    elif body.get('suggestions'): st.markdown(" ".join(body['suggestions']))
+                else:
+                    st.info("No specific suggestions for this prompt.")
 
 with tab2:
     # --- STYLE EXPLORER MODE ---
     st.header("Explore a Single Style")
     st.markdown("Select a single keyword to discover its closest associations, explore its stylistic neighborhood, and get a pre-built prompt starter kit.")
 
+    # --- API Key Management ---
+    with st.expander("🔑 Gemini API Key Configuration"):
+        st.info(
+            "A Google Gemini API key is required for the enhanced Prompt Starter Kit. "
+            "You can get one from [Google AI Studio](https://aistudio.google.com/apikey). "
+            "The app will first check for a `GEMINI_API_KEY` environment variable."
+        )
+        gemini_api_key_input = st.text_input(
+            "Enter your Gemini API Key here:",
+            type="password",
+            help="Your key is not stored. It is only used for this session.",
+            key="gemini_api_key_input"
+        )
+    gemini_api_key = gemini_api_key_input or os.getenv("GEMINI_API_KEY")
     all_styles_sorted = sorted(list(DEFAULT_STYLES))
     col1_exp, col2_exp = st.columns(2)
     with col1_exp:
@@ -149,24 +168,72 @@ with tab2:
             if secondary_style == "": secondary_style = None
 
     if primary_style:
-        explorer_results = analyze_explorer_styles(primary_style, secondary_style, CO_OCCURRENCE_DATA)
-        st.divider()
+        try:
+            # Perform analysis immediately for visuals
+            explorer_results = analyze_explorer_styles(primary_style, secondary_style, CO_OCCURRENCE_DATA)
+            if "error" in explorer_results:
+                st.error(f"Analysis Error: {explorer_results['error']}")
+                # Don't use st.stop() - just display error and return early
+            else:
+                # Only show results if no error
+                st.divider() # Divider is now unconditional
 
-        col1, col2 = st.columns(2)
-        with col1:
-            chart_title = f"Top Associations for '{format_label(primary_style)}'"
-            if secondary_style:
-                chart_title += f" & '{format_label(secondary_style)}' Fusion"
-            st.subheader(chart_title)
-            bar_fig = create_ranked_bar_chart(explorer_results['bar_chart_data'], chart_title, "Normalized Association Strength (log scale)")
-            st.plotly_chart(bar_fig, use_container_width=True)
+                # Charts section in columns
+                col1, col2 = st.columns(2)
+                with col1:
+                    chart_title = f"Top Associations for '{format_label(primary_style)}'"
+                    if secondary_style:
+                        chart_title += f" & '{format_label(secondary_style)}' Fusion"
+                    st.subheader(chart_title)
+                    bar_fig = create_ranked_bar_chart(explorer_results['bar_chart_data'], chart_title, "Normalized Association Strength (log scale)")
+                    st.plotly_chart(bar_fig, use_container_width=True)
 
-            st.subheader("📝 Prompt Starter Kit")
-            st.info("Copy the prompt below as a starting point for your creation.")
-            st.code(explorer_results['prompt_starter_text'], language='text')
+                with col2:
+                    st.subheader("Association Constellation")
+                    explorer_graph = create_association_map(explorer_results['graph_data'])
+                    html_content = explorer_graph.generate_html()
+                    components.html(html_content, height=620, scrolling=True)
 
-        with col2:
-            st.subheader("Association Constellation")
-            explorer_graph = create_association_map(explorer_results['graph_data'])
-            html_content = explorer_graph.generate_html()
-            components.html(html_content, height=620, scrolling=True)
+                # Prompt Starter Kit section - full width
+                st.divider()
+                st.subheader("📝 Prompt Starter Kit")
+                st.info("Click the button below to use Gemini to craft a creative, narrative-style prompt based on the analysis.")
+                
+                if st.button("✨ Generate Creative Prompt with Gemini", key="generate_prompt_btn"):
+                    if not gemini_api_key:
+                        st.warning("Please provide your Gemini API key in the configuration expander above.")
+                    else:
+                        with st.spinner("🤖 Calling the creative co-pilot..."):
+                            st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
+                                explorer_results['creative_brief'], gemini_api_key
+                            )
+                
+                if st.session_state.starter_prompt:
+                    if st.session_state.starter_prompt.startswith("ERROR:"):
+                        st.error(st.session_state.starter_prompt)
+                    else:
+                        st.markdown("**Generated Prompt:**")
+                        
+                        # Create columns for the text area and copy button
+                        prompt_col, copy_col = st.columns([4, 1])
+                        
+                        with prompt_col:
+                            st.text_area(
+                                label="Your Creative Prompt",
+                                value=st.session_state.starter_prompt,
+                                height=150,
+                                help="Copy this prompt and paste it into Suno",
+                                label_visibility="collapsed"
+                            )
+                        
+                        with copy_col:
+                            st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
+                            if st.button("📋 Copy", help="Copy prompt to clipboard"):
+                                st.success("Prompt copied! (Ctrl+C from the text area)")
+                        
+                        # Alternative: Show a code block for easy selection
+                        with st.expander("📄 View as selectable text", expanded=False):
+                            st.code(st.session_state.starter_prompt, language=None)
+        except Exception as e:
+            st.error(f"An unexpected error occurred during analysis: {e}")
+            # Don't use st.stop() - just display error

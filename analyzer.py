@@ -4,6 +4,11 @@ import math
 import re
 import networkx as nx
 
+import os
+from google import genai
+from google.genai import types
+from google.genai import errors
+
 from itertools import combinations
 from collections import defaultdict
 from typing import List, Set, Dict, Any, Optional
@@ -49,6 +54,47 @@ MOOD_KEYWORDS = {
 INSTRUMENT_KEYWORDS = {"guitar", "piano", "synth", "bass", "drum", "violin", "electric guitar", "acoustic guitar", "orchestral", "flute"} # Complete
 VOCAL_KEYWORDS = {"male voice", "female voice", "male vocals", "female vocals", "vocaloid", "female singer", "opera", "gospel"}
 PRODUCTION_PROMPT = "The production is modern and clean with studio-grade fidelity and exceptional warmth and clarity and no harsh highs."
+
+GEMINI_SYSTEM_INSTRUCTION = """You are an expert AI music prompt engineer specializing in Suno v4.5+. Your task is to transform a structured creative brief into a perfect, narrative-style prompt for Suno. You must adhere to the following strict rules:
+
+1.  **Narrative First:** Do not list features. Write a cohesive, descriptive paragraph that tells the story of the song. Describe the emotional arc and how the track evolves.
+2.  **Punctuation is Code:**
+    *   You MUST use periods (`.`) to separate distinct conceptual blocks (e.g., Genre/Feel, Instrumentation, Vocals, Production). A good prompt has 3-5 distinct sentences.
+    *   Within a single block, you MUST NOT use commas to separate descriptors. Instead, you MUST connect them with 'and' or 'with' to form a continuous phrase.
+3.  **Creative Synthesis:** When given contradictory concepts (e.g., sad and upbeat), your primary goal is to find a creative, believable fusion. Propose a narrative or aesthetic that resolves the paradox. Do not simply state the contradiction. For a single style, your goal is to expand upon its core identity with vivid, evocative language.
+4.  **Tag Dilution:** Incorporate multiple related adjectives and descriptive terms from the provided brief to give Suno a rich semantic context, but ensure they fit naturally within the narrative.
+5.  **Structure:** The final prompt should implicitly cover: 1. Overall Genre and Mood. 2. Key Instrumentation. 3. Vocal Style and Performance. 4. Production and Mastering.
+6.  **Clarity and Fidelity:** Use phrases known to produce high-quality audio, such as 'studio-grade fidelity', 'no harsh highs', 'clean mix', and 'modern professional mastering' in the final sentence.
+"""
+
+def generate_polished_prompt_with_gemini(creative_brief: str, api_key: str) -> str:
+    """Calls the Gemini 2.5 Pro API to generate a polished Suno prompt."""
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=creative_brief,
+            config=types.GenerateContentConfig(
+                system_instruction=GEMINI_SYSTEM_INSTRUCTION,
+                temperature=0.7 # Add a little creativity
+            ),
+        )
+        return response.text
+    except errors.APIError as e:
+        return f"ERROR: Gemini API Error - {e.message}"
+    except Exception as e:
+        return f"ERROR: An unexpected error occurred while contacting Gemini: {str(e)}"
+
+def orchestrate_gemini_prompt_generation(creative_brief: str, api_key: str) -> str:
+    """
+    Takes a creative brief and an API key, then calls the Gemini API.
+    This function isolates the API call from the data analysis.
+    """
+    if not api_key:
+        return "ERROR: Gemini API key not found. Please provide your API key in the app to generate a prompt."
+    
+    # This function now exclusively handles the API call.
+    return generate_polished_prompt_with_gemini(creative_brief, api_key)
 
 
 
@@ -216,34 +262,21 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
 
         graph_data = {"nodes": nodes, "edges": edges}
 
+        # --- PROMPT STARTER KIT (Single Style) - COMPILE BRIEF FOR GEMINI ---
         top_associated_styles = [style for style, score in sorted_assocs[:15]]
-        genre_associates = [style for style, score in sorted_assocs[:3]]
-        genre_prompt = f"A powerful and modern {primary_style} anthem"
-        if len(genre_associates) == 1: genre_prompt += f" that draws heavy influence from {genre_associates[0]}."
-        elif len(genre_associates) == 2: genre_prompt += f" that draws heavy influence from {genre_associates[0]} and incorporates the driving energy of {genre_associates[1]}."
-        elif len(genre_associates) >= 3: genre_prompt += f" that draws heavy influence from {genre_associates[0]} and incorporates the driving energy of {genre_associates[1]} and the melodic structure of {genre_associates[2]}."
-        else: genre_prompt += "."
+        personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
+        top_moods = [m for m in top_associated_styles if m in MOOD_KEYWORDS][:3]
+        top_instruments = [i for i in top_associated_styles if i in INSTRUMENT_KEYWORDS][:3]
+        top_vocals = [v for v in top_associated_styles if v in VOCAL_KEYWORDS][:2]
 
-        found_moods = [mood for mood in top_associated_styles if mood in MOOD_KEYWORDS]
-        if len(found_moods) >= 2: mood_prompt = f"The overall mood is {found_moods[0]} and intensely {found_moods[1]} building throughout the track."
-        elif len(found_moods) == 1: mood_prompt = f"The overall mood is deeply {found_moods[0]} and builds in intensity throughout the track."
-        else: mood_prompt = "The track has an emotionally resonant and dynamic feel that builds in intensity."
-
-        found_instruments = [inst for inst in top_associated_styles if inst in INSTRUMENT_KEYWORDS]
-        inst_priority = ['guitar', 'electric guitar', 'acoustic guitar', 'synth', 'piano', 'bass', 'drum', 'orchestral', 'violin', 'flute']
-        sorted_instruments = sorted(found_instruments, key=lambda x: inst_priority.index(x) if x in inst_priority else len(inst_priority))[:3]
-        if len(sorted_instruments) >= 3: instrument_prompt = f"The instrumentation is centered around a powerful {sorted_instruments[0]} and driving {sorted_instruments[1]} with a crisp {sorted_instruments[2]} section."
-        elif len(sorted_instruments) == 2: instrument_prompt = f"The instrumentation prominently features a lush {sorted_instruments[0]} and a solid {sorted_instruments[1]} rhythm."
-        elif len(sorted_instruments) == 1: instrument_prompt = f"A prominent {sorted_instruments[0]} carries the main melody."
-        else: instrument_prompt = "The track features a rich and layered instrumentation with a strong rhythmic foundation."
-
-        found_vocals = [vocal for vocal in top_associated_styles if vocal in VOCAL_KEYWORDS]
-        if found_vocals:
-            vocal_style = found_vocals[0].replace(" voice", "").replace(" vocals", "").replace(" singer", "")
-            vocal_prompt = f"A powerful {vocal_style} voice leads the track, supported by rich layered background harmonies."
-        else: vocal_prompt = "Featuring clear and expressive lead vocals with rich layered background harmonies."
-            
-        prompt_starter_text = " ".join([genre_prompt, mood_prompt, instrument_prompt, vocal_prompt, PRODUCTION_PROMPT])
+        creative_brief = f"""
+        **Primary Style:** {primary_style}
+        **Personality:** {personality}
+        **Key Associated Moods:** {', '.join(top_moods) or 'N/A'}
+        **Key Associated Instruments:** {', '.join(top_instruments) or 'N/A'}
+        **Key Associated Vocals:** {', '.join(top_vocals) or 'N/A'}
+        **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt. Your goal is to expand upon the core identity of the primary style, using the associated concepts to create a rich, vivid, and compelling narrative description for a song. Follow all rules from your system instruction.
+        """.strip()
 
     else:
         # --- FUSION ANALYSIS ---
@@ -289,80 +322,35 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
 
         graph_data = {"nodes": nodes, "edges": edges}
 
-        # 3. Prompt Starter Kit for Fusions
-        top_associated_styles = [style for style, score in sorted_combined_assocs[:20]]
-
-        # -- Part 1: Genre Prompt --
+        # --- PROMPT STARTER KIT (Fusion) - COMPILE BRIEF FOR GEMINI ---
         p1_personality = STYLE_PERSONALITY_DICT.get(primary_style, {})
         p2_personality = STYLE_PERSONALITY_DICT.get(secondary_style, {})
 
-        top_bridge = next((style for style in [s for s, _ in sorted_combined_assocs] if style in bridge_nodes and style not in MOOD_KEYWORDS), None)
-
-        if p1_personality and p2_personality:
-            genre_prompt = f"A fusion that blends the {p1_personality['adjectives'][0]} and {p1_personality['energy']} feel of {primary_style} with the {p2_personality['adjectives'][0]}, {p2_personality['energy']} quality of {secondary_style}."
-        elif top_bridge:
-            genre_prompt = f"A compelling fusion of {primary_style} and {secondary_style}, combining their core elements, grounded in a shared influence of {top_bridge}."
-        else:
-            genre_prompt = f"An experimental and highly contrasting fusion of {primary_style} and {secondary_style}, aiming to blend their distinct soundscapes into a novel composition."
-
-        # -- Part 2: Mood Prompt --
-        moods_a = {mood for mood in top_assocs_a if mood in MOOD_KEYWORDS}
-        moods_b = {mood for mood in top_assocs_b if mood in MOOD_KEYWORDS}
-        shared_moods = list(moods_a.intersection(moods_b))
-        unique_moods_a = list(moods_a - moods_b)
-        unique_moods_b = list(moods_b - moods_a)
-
-        if shared_moods: # Best case: data-driven shared mood
-            mood_prompt = f"The mood is intensely {shared_moods[0]}, drawing its power from both genres."
-        elif unique_moods_a and unique_moods_b: # Good case: data-driven contrasting moods
-            mood_prompt = f"The track's mood is a unique contrast, blending the {unique_moods_a[0]} edge of {primary_style} with the {unique_moods_b[0]} atmosphere of {secondary_style}."
-        elif p1_personality and p2_personality: # Personality-driven fallback
-            mood_prompt = f"The emotional arc captures the {p1_personality['adjectives'][0]} nature of {primary_style}, building towards the {p2_personality['adjectives'][0]} intensity of {secondary_style}."
-        else: # Fallback
-            mood_prompt = "The track has an emotionally resonant and dynamic feel that builds in intensity."
-
-        # -- Part 3: Instrumentation Prompt --
-        inst_priority = ['guitar', 'electric guitar', 'acoustic guitar', 'synth', 'piano', 'bass', 'drum', 'orchestral', 'violin', 'flute']
-        # CRITICAL FIX: Prioritize primary/secondary styles if they are instruments
-        forced_instruments = []
-        if primary_style in INSTRUMENT_KEYWORDS: forced_instruments.append(primary_style)
-        if secondary_style in INSTRUMENT_KEYWORDS: forced_instruments.append(secondary_style)
-
-        instruments_a = sorted([inst for inst in top_assocs_a if inst in INSTRUMENT_KEYWORDS], key=lambda x: inst_priority.index(x) if x in inst_priority else len(inst_priority))[:2]
-        instruments_b = sorted([inst for inst in top_assocs_b if inst in INSTRUMENT_KEYWORDS], key=lambda x: inst_priority.index(x) if x in inst_priority else len(inst_priority))[:2]
-        combined_instruments = list(dict.fromkeys(forced_instruments + instruments_a + instruments_b)) # Get unique instruments, preserving order
-
-        if len(combined_instruments) >= 3:
-            instrument_prompt = f"The instrumentation is a rich hybrid, centered around the {combined_instruments[0]} and {combined_instruments[1]}, with a solid {combined_instruments[2]} foundation."
-        elif len(combined_instruments) == 2:
-            instrument_prompt = f"The instrumentation blends a prominent {combined_instruments[0]} with the texture of {combined_instruments[1]}."
-        else: # Fallback
-            instrument_prompt = "The track features a rich and layered instrumentation with a strong rhythmic foundation."
-
-        # -- Part 4: Vocal Prompt --
-        vocals_a = [vocal for vocal in top_assocs_a if vocal in VOCAL_KEYWORDS]
-        vocals_b = [vocal for vocal in top_assocs_b if vocal in VOCAL_KEYWORDS]
+        combined_instruments = list(dict.fromkeys(
+            ([p for p in [primary_style, secondary_style] if p in INSTRUMENT_KEYWORDS]) +
+            ([i for i in top_assocs_a if i in INSTRUMENT_KEYWORDS][:2]) +
+            ([i for i in top_assocs_b if i in INSTRUMENT_KEYWORDS][:2])
+        ))[:3]
         
-        # Use personality-driven vocal style if available, otherwise fallback to data-driven or generic
-        if p1_personality.get('vocal_style'):
-            vocal_prompt = f"Featuring {p1_personality['vocal_style']} lead vocals, supported by rich layered background harmonies."
-        elif vocals_a:
-            primary_vocal_style = vocals_a[0].replace(" voice", "").replace(" vocals", "").replace(" singer", "")
-            if vocals_b and vocals_b[0] != vocals_a[0]:
-                secondary_vocal_style = vocals_b[0].replace(" voice", "").replace(" vocals", "").replace(" singer", "")
-                vocal_prompt = f"Featuring a powerful {primary_vocal_style} lead vocal, with ethereal {secondary_vocal_style} vocals providing soaring background harmonies."
-            else:
-                vocal_prompt = f"A powerful {primary_vocal_style} voice leads the track, supported by rich layered background harmonies."
-        else: # Fallback
-            vocal_prompt = "Featuring clear and expressive lead vocals with rich layered background harmonies."
+        creative_brief = f"""
+        **Primary Style 1:** {primary_style}
+        *   **Personality:** {p1_personality}
 
-        # -- Part 5: Assemble --
-        prompt_starter_text = " ".join([genre_prompt, mood_prompt, instrument_prompt, vocal_prompt, PRODUCTION_PROMPT])
+        **Primary Style 2:** {secondary_style}
+        *   **Personality:** {p2_personality}
+
+        **Contradiction to Resolve:** The core challenge is to blend the potentially conflicting personalities, moods, and aesthetics of {primary_style} and {secondary_style}.
+
+        **Bridge Nodes (Shared Influences):** {', '.join(bridge_nodes) or 'None found, a true experimental fusion.'}
+        **Key Combined Instruments:** {', '.join(combined_instruments) or 'N/A'}
+
+        **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt following all rules from your system instruction. Your primary goal is to find a creative angle to fuse the two styles, resolving their contradictions into a believable and compelling musical idea.
+        """.strip()
 
     return {
         "bar_chart_data": bar_chart_data,
         "graph_data": graph_data,
-        "prompt_starter_text": prompt_starter_text,
+        "creative_brief": creative_brief, # Return the brief, not the final prompt
     }
 # --- Main Orchestrator ---
 def prepare_analysis_results(prompt_text: str, negative_prompt_text: str, default_styles: Set[str], co_occurrence_data: Dict) -> Dict[str, Any]:
