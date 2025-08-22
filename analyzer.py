@@ -294,12 +294,21 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         top_instruments = [i for i in top_associated_styles if i in INSTRUMENT_KEYWORDS][:3]
         top_vocals = [v for v in top_associated_styles if v in VOCAL_KEYWORDS][:2]
 
+        # Build additional sections for negative styles and creative direction
+        negative_section = ""
+        if negative_keywords_set:
+            negative_section = f"\n        **Negative Styles (AVOID these):** {', '.join(negative_keywords_set)}"
+        
+        creative_direction_section = ""
+        if creative_direction and creative_direction.strip():
+            creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}"
+
         creative_brief = f"""
         **Primary Style:** {primary_style}
         **Personality:** {personality}
         **Key Associated Moods:** {', '.join(top_moods) or 'N/A'}
         **Key Associated Instruments:** {', '.join(top_instruments) or 'N/A'}
-        **Key Associated Vocals:** {', '.join(top_vocals) or 'N/A'}
+        **Key Associated Vocals:** {', '.join(top_vocals) or 'N/A'}{negative_section}{creative_direction_section}
         **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt. Your goal is to expand upon the core identity of the primary style, using the associated concepts to create a rich, vivid, and compelling narrative description for a song. Follow all rules from your system instruction.
         """.strip()
 
@@ -357,6 +366,15 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
             ([i for i in top_assocs_b if i in INSTRUMENT_KEYWORDS][:2])
         ))[:3]
         
+        # Build additional sections for negative styles and creative direction
+        negative_section = ""
+        if negative_keywords_set:
+            negative_section = f"\n        **Negative Styles (AVOID these):** {', '.join(negative_keywords_set)}"
+        
+        creative_direction_section = ""
+        if creative_direction and creative_direction.strip():
+            creative_direction_section = f"\n        **Mandatory Creative Direction:** {creative_direction.strip()}"
+        
         creative_brief = f"""
         **Primary Style 1:** {primary_style}
         *   **Personality:** {p1_personality}
@@ -367,7 +385,7 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
         **Contradiction to Resolve:** The core challenge is to blend the potentially conflicting personalities, moods, and aesthetics of {primary_style} and {secondary_style}.
 
         **Bridge Nodes (Shared Influences):** {', '.join(bridge_nodes) or 'None found, a true experimental fusion.'}
-        **Key Combined Instruments:** {', '.join(combined_instruments) or 'N/A'}
+        **Key Combined Instruments:** {', '.join(combined_instruments) or 'N/A'}{negative_section}{creative_direction_section}
 
         **Task:** Based on the data above, write an optimal Suno 4.5+ style prompt following all rules from your system instruction. Your primary goal is to find a creative angle to fuse the two styles, resolving their contradictions into a believable and compelling musical idea.
         """.strip()
@@ -375,7 +393,8 @@ def analyze_explorer_styles(primary_style: str, secondary_style: Optional[str], 
     return {
         "bar_chart_data": bar_chart_data,
         "graph_data": graph_data,
-        "creative_brief": creative_brief, # Return the brief, not the final prompt
+    "creative_brief": creative_brief,
+    "secondary_style_analyzed": secondary_style, # Pass this back for UI state
     }
 # --- Main Orchestrator ---
 @st.cache_data

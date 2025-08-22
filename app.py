@@ -53,6 +53,9 @@ with tab1:
 
     if submit_button:
         st.session_state.prompt_text = prompt_text_input
+        # Clear the other tab's results when this form is submitted
+        if 'explorer_results' in st.session_state:
+            del st.session_state.explorer_results
         if prompt_text_input:
             analysis_results = prepare_analysis_results(
                 prompt_text_input, negative_prompt_input, DEFAULT_STYLES, CO_OCCURRENCE_DATA
@@ -181,17 +184,34 @@ with tab2:
         submit_button = st.form_submit_button("✨ Analyze & Generate Prompt Kit", use_container_width=True)
 
     if submit_button and primary_style:
-        explorer_results = analyze_explorer_styles(
+        # Clear any previous prompt from session state for a clean user experience
+        st.session_state.starter_prompt = None
+        # Clear the other tab's results when this form is submitted
+        if 'analysis_results' in st.session_state:
+            del st.session_state.analysis_results
+
+        # Handle self-fusion edge case gracefully
+        if primary_style == secondary_style:
+            st.info(f"You've selected '{format_label(primary_style)}' for both styles. Showing analysis for a single style.")
+            secondary_style = None # Ensure single-style logic is triggered
+
+        # Store results in session state instead of a local variable
+        st.session_state.explorer_results = analyze_explorer_styles(
             primary_style, secondary_style, negative_prompt_explorer_input, creative_direction_input, CO_OCCURRENCE_DATA
         )
-        if "error" in explorer_results:
-            st.error(f"Analysis Error: {explorer_results['error']}")
-        else:
+
+    # Render results if they exist in the session state
+    if 'explorer_results' in st.session_state and st.session_state.explorer_results:
+        explorer_results = st.session_state.explorer_results
+
+        if "error" not in explorer_results:
             st.divider()
             col1, col2 = st.columns(2)
             with col1:
                 chart_title = f"Top Associations for '{format_label(primary_style)}'"
-                if secondary_style:
+                # We need to get the secondary style from the session state if it exists
+                secondary_style_from_results = explorer_results.get('secondary_style_analyzed')
+                if secondary_style_from_results:
                     chart_title += f" & '{format_label(secondary_style)}' Fusion"
                 st.subheader(chart_title)
                 bar_fig = create_ranked_bar_chart(explorer_results['bar_chart_data'], chart_title, "Normalized Association Strength (log scale)")
@@ -203,13 +223,17 @@ with tab2:
                 components.html(html_content, height=620, scrolling=True)
             st.divider()
             st.subheader("📝 Generated Creative Prompt")
-            if not gemini_api_key:
-                st.warning("Please provide your Gemini API key in the configuration expander above to generate a prompt.")
-            else:
-                with st.spinner("🤖 Calling the creative co-pilot..."):
-                    st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
-                        explorer_results['creative_brief'], gemini_api_key
-                    )
+
+            # Check for starter_prompt; if it's not there, it means a new analysis was run.
+            if 'starter_prompt' not in st.session_state or st.session_state.starter_prompt is None:
+                if not gemini_api_key:
+                    st.warning("Please provide your Gemini API key in the configuration expander to generate a prompt.")
+                else:
+                    with st.spinner("🤖 Calling the creative co-pilot..."):
+                        st.session_state.starter_prompt = orchestrate_gemini_prompt_generation(
+                            explorer_results['creative_brief'], gemini_api_key
+                        )
+
             if 'starter_prompt' in st.session_state and st.session_state.starter_prompt:
                 if st.session_state.starter_prompt.startswith("ERROR:"):
                     st.error(st.session_state.starter_prompt)
@@ -221,5 +245,8 @@ with tab2:
                         help="Copy this prompt and paste it into Suno",
                         label_visibility="collapsed"
                     )
-                    with st.expander("📄 **Copy from code block (Recommended)**"):
+                    with st.expander("📄 **Copy Prompt from Code Block (Recommended)**", expanded=True):
+                        st.markdown("💡 Use the copy icon in the top right of the box below for a reliable one-click copy.")
                         st.code(st.session_state.starter_prompt, language=None)
+        else:
+            st.error(f"Analysis Error: {explorer_results['error']}")
